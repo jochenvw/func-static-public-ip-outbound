@@ -1,5 +1,6 @@
 # Azure Function App with static outbound IP address
 
+## Challenge
 A 'typical' Azure function on an App Service plan, can have a number of outbound IP addresses when it makes outbound calls. This is documented [here](https://docs.microsoft.com/en-us/azure/azure-functions/ip-addresses) on the Azure Documentations page and you can find these IPs through either the portal or Azure CLI for instance:
 
 ```
@@ -42,10 +43,24 @@ However, the ASE poses it's own set of challenges:
  - All public endpoints are removed from your apps and functions - so you have to find a solution for deployment
  - Same for your mangement consoles, streaming logs etc. etc. 
 
+## Solution 
  And so I tried to look for a different solution and got the idea for the solution from [Dave Liefbroer](https://www.linkedin.com/in/dave-liefbroer-5b05091/?originalSubdomain=nl). Thanks Dave!
 
 He proposed the following solution:
 
 ![design](docs/traffic_flow.png "Traffic flow of Azure Function, route table and Azure Firewall")
 
+
+## How to deploy
+
+The file `infra/deploy.azcli` contains a deployment script to provision the infrastructure yourself: 
+[link](/infra). I would recommend to observe the following comment:
+
+```
+# Before you continue - I would suggest to find/replace the following
+# 'prefix-'      - set it to your company/department or something, e.g. 'ms-csunl-jvw-' 
+                  (NOTE: don't forget trailing dash)
+# 'projectname'  - set it to the name of your project, e.g. 'publicipdemo'
+# 'env'          - set it to a postfix of the resource-names, e.g. 'dev' 
+```
 
