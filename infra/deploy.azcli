@@ -1,0 +1,59 @@
+# Azure CLI deployment script for deploying the resources
+# Requires: https://docs.microsoft.com/en-us/cli/azure/install-azure-cli or perhaps better https://chocolatey.org/packages/azure-cli 
+
+az login
+
+# Before you continue - I would suggest to find/replace the following
+# 'prefix-'          - set it to your company/department or something, e.g. 'ms-csunl-jvw-'  ( NOTE: don't forget trailing dash )
+# 'projectname'    - set it to the name of your project, e.g. 'publicipdemo'
+# 'env'             - set it to a postfix of the resource-names, e.g. 'dev' 
+
+az group create --location westeurope --name prefix-projectname-env
+
+
+# Set up the virtual network + subnets
+az network vnet create --resource-group prefix-projectname-env --location westeurope --name projectname-env --address-prefixes 10.0.0.0/16
+az network vnet subnet create --resource-group prefix-projectname-env --vnet-name projectname-env --name AzureBastionSubnet --address-prefixes 10.0.0.0/24
+az network vnet subnet create --resource-group prefix-projectname-env --vnet-name projectname-env --name AppSubnet --address-prefixes 10.0.1.0/24
+az network vnet subnet create --resource-group prefix-projectname-env --vnet-name projectname-env --name AzureFirewallSubnet --address-prefixes 10.0.255.0/24
+
+# Set up a log analytics workspace and app insights that uses that same workspace
+# this will allow infrastructure logs and application logs to flow into the same workspace
+az monitor log-analytics workspace create --resource-group prefix-projectname-env --workspace-name projectname-logs
+az monitor app-insights component create --resource-group prefix-projectname-env --location westeurope --app projectname-insights --kind web --workspace projectname-logs
+
+# Set up the app service plan - that will host the function app
+# we need Premium SKU as that support VNET integration
+az appservice plan create --resource-group prefix-projectname-env --name projectname-plan --is-linux --sku P1V2 
+
+# Set up the Azure Function - which requires a storage account
+az storage account create --resource-group prefix-projectname-env --location westeurope --name projectnameenvstore --sku Standard_LRS
+az functionapp create --resource-group prefix-projectname-env --name projectname-func --storage-account projectnameenvstore --plan projectname-plan --runtime node --runtime-version 12 --app-insights projectname-insights --functions-version 3
+
+# Configure the Azure function to:
+# 1. Integrate with the virtual network: https://docs.microsoft.com/en-us/azure/azure-functions/functions-networking-options
+# 2. Ensure *ALL* outbound traffic flows into the VNET - because this is not the case by default: https://docs.microsoft.com/en-us/azure/app-service/web-sites-integrate-with-vnet#regional-vnet-integration
+az functionapp vnet-integration add --resource-group prefix-projectname-env --name projectname-func --vnet projectname-env --subnet AppSubnet
+az functionapp config appsettings set --resource-group prefix-projectname-env --name projectname-func --settings "WEBSITE_VNET_ROUTE_ALL=1"
+
+# Create the Azure Firewall and configure a public and private IP for it
+az network firewall create --resource-group prefix-projectname-env --location westeurope --name projectname-fw --private-ranges IANAPrivateRanges 
+az network public-ip create --resource-group prefix-projectname-env --location westeurope --name projectname-fw-pip --allocation-method static --sku Standard
+az network firewall ip-config create --resource-group prefix-projectname-env --firewall-name projectname-fw --name projectname-fw-pip --public-ip-address projectname-fw-pip --vnet-name projectname-env 
+
+# Configure a firewall rule that just allows all traffic to flow out of the VNET
+# You probably want to restrict this later on
+az network firewall application-rule create --firewall-name projectname-fw --name allowAllTraffic --collection-name default --protocols https=443 --resource-group prefix-projectname-env --action Allow --priority 100 --source-addresses * --target-fqdns *
+
+# Create and configure a route table that:
+# 1. Routes all captured traffic to a virtual appliance @ 10.0.255.4 - which is the Azure Firewall ( first available address in the subnet )
+# 2. Associates this rule with the 'AppSubnet' so it captures all traffic from the function
+az network route-table create --resource-group prefix-projectname-env --location westeurope --name projectname-routes
+az network route-table route create --resource-group prefix-projectname-env --route-table-name projectname-routes --name alltraffic-to-fw-rule --address-prefix 0.0.0.0/0 --next-hop-type virtualappliance --next-hop-ip-address 10.0.255.4
+az network vnet subnet update --resource-group prefix-projectname-env --vnet-name projectname-env --name AppSubnet --route-table projectname-routes
+
+
+
+echo "This is the public IP address of the firewall:"
+az network public-ip show --resource-group prefix-projectname-env --name projectname-fw-pip --query ipAddress
+# Done ! Next step is to deploy an Azure Function ...
