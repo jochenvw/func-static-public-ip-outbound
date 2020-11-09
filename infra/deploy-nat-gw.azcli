@@ -1,0 +1,46 @@
+# Azure CLI deployment script for deploying the resources
+# Requires: https://docs.microsoft.com/en-us/cli/azure/install-azure-cli or perhaps better https://chocolatey.org/packages/azure-cli 
+
+az login
+
+# Before you continue - I would suggest to find/replace the following
+# 'prefix-'       - set it to your company/department or something, e.g. 'ms-csunl-jvw-'  ( NOTE: don't forget trailing dash )
+# 'projectname'   - set it to the name of your project, e.g. 'publicipdemo'
+# 'env'           - set it to a postfix of the resource-names, e.g. 'dev' 
+
+az group create --location westeurope --name prefix-projectname-env
+
+# Set up the virtual network + subnets
+az network vnet create --resource-group prefix-projectname-env --location westeurope --name projectname-env --address-prefixes 10.0.0.0/16
+az network vnet subnet create --resource-group prefix-projectname-env --vnet-name projectname-env --name AzureBastionSubnet --address-prefixes 10.0.0.0/24
+az network vnet subnet create --resource-group prefix-projectname-env --vnet-name projectname-env --name AppSubnet --address-prefixes 10.0.1.0/24
+az network vnet subnet create --resource-group prefix-projectname-env --vnet-name projectname-env --name AzureFirewallSubnet --address-prefixes 10.0.255.0/24
+
+# Set up a log analytics workspace and app insights that uses that same workspace
+# this will allow infrastructure logs and application logs to flow into the same workspace
+az monitor log-analytics workspace create --resource-group prefix-projectname-env --workspace-name projectname-logs
+az monitor app-insights component create --resource-group prefix-projectname-env --location westeurope --app projectname-insights --kind web --workspace projectname-logs
+
+# Set up the app service plan - that will host the function app
+# we need Premium SKU as that support VNET integration
+az appservice plan create --resource-group prefix-projectname-env --name projectname-plan --is-linux --sku P1V2 
+
+# Set up the Azure Function - which requires a storage account
+az storage account create --resource-group prefix-projectname-env --location westeurope --name projectnameenvstore --sku Standard_LRS
+az functionapp create --resource-group prefix-projectname-env --name projectname-func --storage-account projectnameenvstore --plan projectname-plan --runtime node --runtime-version 12 --app-insights projectname-insights --functions-version 3
+
+# Configure the Azure function to:
+# 1. Integrate with the virtual network: https://docs.microsoft.com/en-us/azure/azure-functions/functions-networking-options
+# 2. Ensure *ALL* outbound traffic flows into the VNET - because this is not the case by default: https://docs.microsoft.com/en-us/azure/app-service/web-sites-integrate-with-vnet#regional-vnet-integration
+az functionapp vnet-integration add --resource-group prefix-projectname-env --name projectname-func --vnet projectname-env --subnet AppSubnet
+az functionapp config appsettings set --resource-group prefix-projectname-env --name projectname-func --settings "WEBSITE_VNET_ROUTE_ALL=1"
+
+
+# Deploy the NAT gateway and configure the subnet to route its traffic through the NAT gateway
+az network public-ip create --resource-group prefix-projectname-env --location westeurope --name projectname-natgw-pip --allocation-method static --sku Standard
+az network nat gateway create --resource-group prefix-projectname-env --location westeurope --name projectname-nat-gw --public-ip-addresses projectname-natgw-pip
+az network vnet subnet update -n AppSubnet --vnet-name projectname-env -g prefix-projectname-env --nat-gateway projectname-nat-gw --address-prefixes "0.0.0.0/0"
+
+echo "This is the public IP address of the firewall:"
+az network public-ip show --resource-group prefix-projectname-env --name projectname-natgw-pip --query ipAddress
+# Done ! Next step is to deploy an Azure Function ...

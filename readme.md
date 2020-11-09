@@ -1,3 +1,10 @@
+# NOTE: may be subject to change. I'm investigating the NAT gateway route now for the static IP address
+
+
+
+
+
+
 # Azure Function App with static outbound IP address
 
 ## Challenge
@@ -53,7 +60,7 @@ He proposed the following solution:
 
 ## How to deploy
 
-The file `infra/deploy.azcli` contains a deployment script to provision the infrastructure yourself: 
+The file `infra/deploy-fw.azcli` contains a deployment script to provision the infrastructure yourself: 
 [link](/infra). I would recommend to observe the following comment:
 
 ```
